@@ -2,6 +2,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -12,6 +13,7 @@ import { defineTool, ToolArgsError, ToolContextUnavailableError, type ToolRunCon
 import type { Client } from 'ssh2'
 import { readServerAuthentication, resolveSavedServer, type ServerEndpoint } from './catalog.ts'
 import { captureCommand, type CommandPreview } from './command-output.ts'
+import { readXTerminalHostFingerprint } from './host-trust.ts'
 import { connectVerified } from './ssh-session.ts'
 import { pruneClosedOutputs } from './output-files.ts'
 
@@ -34,7 +36,7 @@ interface Connection {
 
 /** Local trusted keys and deadlines for the remote tools. */
 export interface RemoteConfig {
-  /** OpenSSH SHA-256 fingerprints indexed by host:port. */
+  /** Host:port fingerprint overrides for the local XTerminal trust store. */
   hostKeys?: Record<string, string>
   /** Maximum SSH handshake duration in milliseconds. */
   connectTimeoutMs?: number
@@ -103,6 +105,7 @@ export function registerRemoteTools(
   const connectTimeout = config.connectTimeoutMs ?? 15_000
   const commandTimeout = config.commandTimeoutMs ?? 120_000
   const keys = new Map(Object.entries(config.hostKeys ?? {}))
+  const trustFile = join(homedir(), 'Library', 'Application Support', 'xterminal', 'ssh', 'known_hosts.json')
   const connections = new Map<Agent, Map<string, Connection>>()
   const retired = new Map<Agent, Set<Connection>>()
   const connecting = new Map<Agent, Map<string, Promise<Connection>>>()
@@ -171,9 +174,15 @@ export function registerRemoteTools(
       const path = await database(signal)
       const original = await catalogIdentity(path)
       const target = resolveSavedServer(path, endpoint)
-      const hostKey = keys.get(`${target.host}:${target.port}`)
+      const hostKey = keys.get(`${target.host}:${target.port}`) ?? (process.platform === 'darwin'
+        ? await readXTerminalHostFingerprint(trustFile, target)
+        : undefined)
+      signal.throwIfAborted()
       if (hostKey === undefined) {
-        throw new XTerminalRemoteError('Configure a trusted SSH host fingerprint for this endpoint.', 'XTERMINAL_HOST_KEY_REQUIRED')
+        throw new XTerminalRemoteError(
+          'No trusted SSH host fingerprint found. Verify the host in XTerminal or configure a trusted fingerprint in Harness hostKeys.',
+          'XTERMINAL_HOST_KEY_REQUIRED',
+        )
       }
       await approve(ctx, agent, exec, `Connect to ${JSON.stringify(target.title)} (${target.host}:${target.port}).`)
       signal.throwIfAborted()

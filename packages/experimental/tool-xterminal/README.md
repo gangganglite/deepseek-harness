@@ -1,6 +1,6 @@
 ---
 description: "Find saved XTerminal server endpoints from a local Harness profile."
-kind: "package-reference"
+kind: "package-bundle"
 ---
 
 # @deepseek-ai/dsh-tool-xterminal
@@ -13,7 +13,9 @@ Find servers saved in XTerminal by name or host. Harness can remember one read-o
 
 ## Use this package
 
-Opt in by launching a local profile with the package's `cordis.source.patch.yml` from a source checkout. On macOS the plugin checks XTerminal's standard application-data location. A Host operator can set `allowedRoots` to absolute paths of additional trusted local directories. If discovery fails, the model can submit a validated candidate once. Use directories whose contents are controlled by the local operator. To connect, configure `hostKeys` with trusted OpenSSH SHA-256 fingerprints indexed by `host:port`. The profile must expose approvals and background jobs. Set at least two parallel tool slots to use independent targets concurrently.
+Install the local package archive with `dsh plugin --profile <name> add file:/absolute/path/to/the-archive.tgz`, or select the archive in the Desktop plugin manager. The profile loads [the bundle patch](cordis.patch.yml) automatically. For source development, pass `cordis.source.patch.yml` to `dsh --patch`.
+
+On macOS the plugin checks XTerminal's standard application-data location. A Host operator can set `allowedRoots` to absolute paths of additional trusted local directories. If discovery fails, the model can submit a validated candidate once. Use directories whose contents are controlled by the local operator. On macOS, connections reuse the SHA-256 fingerprint XTerminal has trusted for the exact host and port. Set `hostKeys` with trusted OpenSSH SHA-256 fingerprints indexed by `host:port` to override those entries or configure additional hosts. The profile must expose approvals and background jobs. Set at least two parallel tool slots to use independent targets concurrently.
 
 ## Model Experience
 
@@ -25,6 +27,6 @@ The tool schemas are stable across queries and path configuration changes.
 
 ## Known Limitations and Deferred Work
 
-- Host key trust comes from profile configuration. Authentication requires the saved password or private key to be readable by the local process.
+- Hosts missing from the trust file and profile configuration require a trusted fingerprint before the plugin can connect. Authentication requires the saved password or private key to be readable by the local process.
 - Closed output files are retained for 30 days by default. Set `outputRetentionDays` to change the period.
 - An existing saved path persists across restarts. If it becomes invalid, repair the profile's local configuration.

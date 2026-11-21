@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/experimental/tool-xterminal/README.md
 /:
-  en: a496088cfa998d0f
-  zh: 1dd03b023cafad63
+  en: f857ec59a565fd53
+  zh: 8f8e72378d5395fe
 /deepseek-ai-dsh-tool-xterminal:
   en: 04d08f29fe1c83a1
   zh: a23d75dc5007dc62
@@ -12,8 +12,8 @@
   en: 91f443e8962e4f91
   zh: 6e93df7ddb57d795
 /deepseek-ai-dsh-tool-xterminal/use-this-package:
-  en: 75a723928aff9e0d
-  zh: 76df90c6059ff00a
+  en: 9e8181418388b6f0
+  zh: 3d731684f025cdfb
 /deepseek-ai-dsh-tool-xterminal/model-experience:
   en: 025647e17a582e3c
   zh: 90b78da1849903dc
@@ -21,5 +21,5 @@
   en: 5cf768bc3538b1d0
   zh: 454adaeba0d0d029
 /deepseek-ai-dsh-tool-xterminal/known-limitations-and-deferred-work:
-  en: ee23012358402137
-  zh: e281c78ad2961320
+  en: a4801312e4e6176b
+  zh: 202c996ed42c8d96

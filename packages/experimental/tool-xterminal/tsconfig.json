@@ -1,0 +1,39 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../core/tools"
+    },
+    {
+      "path": "../../util/error"
+    },
+    {
+      "path": "../../util/atomic-write"
+    },
+    {
+      "path": "../../boot/app-boot"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../jobs/jobs"
+    },
+    {
+      "path": "../../interaction/user-approval"
+    }
+  ]
+}

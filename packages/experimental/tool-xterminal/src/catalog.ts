@@ -1,8 +1,11 @@
 /** Read the model-visible fields from the local XTerminal SQLite store. */
 
+import type { BigIntStats } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { HarnessError } from '@deepseek-ai/dsh-error'
+import { XTerminalRemoteError } from './remote-error.ts'
 
 const SERVER_STORE = '%GeneralDatabaseServerImp-ServerDatabaseServerImp'
 
@@ -72,6 +75,37 @@ export interface SavedServer extends ServerEndpoint {
   readonly storeKey: string
   readonly itemId: string
   readonly revision: number
+}
+
+/** Catalog file and row selected for a connection approval. */
+export interface SelectedServer {
+  readonly path: string
+  readonly file: Pick<BigIntStats, 'dev' | 'ino'>
+  readonly target: SavedServer
+}
+
+/**
+ * Read the file identity used to bind connection approval to a catalog.
+ * @param path - Validated local catalog path.
+ * @returns The file's device and inode.
+ */
+export async function catalogIdentity(path: string): Promise<SelectedServer['file']> {
+  try {
+    return await stat(path, { bigint: true })
+  } catch (_error) {
+    throw new XTerminalRemoteError('The XTerminal catalog is no longer available.', 'XTERMINAL_TARGET_CHANGED')
+  }
+}
+
+/**
+ * Check that the selected catalog file still exists at its approved path.
+ * @param selection - File and row pinned before approval.
+ */
+export async function verifyCatalogIdentity(selection: SelectedServer): Promise<void> {
+  const current = await catalogIdentity(selection.path)
+  if (current.dev !== selection.file.dev || current.ino !== selection.file.ino) {
+    throw new XTerminalRemoteError('The XTerminal catalog changed. Select the server again.', 'XTERMINAL_TARGET_CHANGED')
+  }
 }
 
 /** Authentication input owned by the local SSH client. */

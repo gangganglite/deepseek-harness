@@ -169,7 +169,7 @@
     </figure>
   </header>
   <nav aria-label="页内目录">
-    <a href="#path">数据库路径</a> <a href="#session">认证与任务接续</a> <a href="#storage">本机存储</a> <a href="#code">工具与模块</a>
+    <a href="#path">数据库路径</a> <a href="#session">认证与任务接续</a> <a href="#reference">临时连接引用</a> <a href="#storage">本机存储</a> <a href="#code">工具与模块</a>
   </nav>
   <main>
     <section id="path"><h2>数据库路径</h2><figure class="diagram" data-diagram><div class="diagram-output" tabindex="0" hidden></div><figcaption>自动发现优先，模型只在未配置且找不到数据库时首次补录。</figcaption><details><summary>查看图源</summary><pre data-mermaid>flowchart LR
@@ -205,6 +205,24 @@
       P--&gt;&gt;H: 报告主机身份错误
     end
 </pre></details></figure><p>A、B 分别使用各自的 SSH 连接。A 等待审批时，B 可独立建连或执行已经获准的命令。超限时提前返回正在写入的路径与作业 ID。完整写入并关闭后才发布完整文件，取消或失败时已返回的文件标为部分输出。</p></section>
+<section id="reference"><h2>临时连接引用</h2><figure class="diagram" data-diagram><div class="diagram-output" tabindex="0" hidden></div><figcaption>Harness 发起连接。插件签发并兑付同进程的一次性引用。</figcaption><details><summary>查看图源</summary><pre data-mermaid>sequenceDiagram
+    accTitle: Harness 使用临时引用建立连接
+    participant T as 连接工具
+    participant X as XTerminal 插件
+    participant H as Harness SSH 执行器
+    participant S as SSH 服务器
+    T-&gt;&gt;X: 目标审批已通过
+    X--&gt;&gt;T: 签发本机一次性引用
+    T-&gt;&gt;H: 请求连接已批准的目标
+    H-&gt;&gt;X: 兑付引用
+    alt 调用、目标和期限均有效
+      X--&gt;&gt;H: 消费引用并提供本机认证材料
+      H-&gt;&gt;S: 校验主机指纹并认证
+      H--&gt;&gt;T: 登记连接并报告状态
+    else 引用无效
+      X--&gt;&gt;H: 拒绝认证请求
+    end
+</pre></details></figure><p>复用现有命令和输出工具。引用绑定当前任务、批准调用与目标，引用和凭据不进入会话。</p></section>
 <section id="storage"><h2>本机存储</h2><figure class="diagram" data-diagram><div class="diagram-output" tabindex="0" hidden></div><figcaption>Harness 只保存数据库路径，服务器记录仍由 XTerminal 管理。</figcaption><details><summary>查看图源</summary><pre data-mermaid>erDiagram
     accTitle: 本机路径记录与 XTerminal 配置
     HARNESS_PROFILE {
@@ -222,6 +240,8 @@
 +  database-path.ts
 +  ssh-session.ts
 +  command-output.ts
++  connection-reference.ts
++  harness-ssh.ts
 </code></pre><p>拟议代码展示会话归属与授权检查。</p><pre tabindex="0"><code class="language-plaintext">index.ts
   search(input) -&gt; catalog.search(await paths.resolve(), input)
   setPath(input) -&gt; paths.initializeIfUnconfigured(input.path) -&gt; configured
@@ -231,9 +251,16 @@
     await authorizeExactTarget(owner, target.publicEndpoint, exec)
     runSerially(owner, target.id):
       requireStillLive(owner, exec.signal)
-      if sessions.hasCurrent(owner, target): return publicStatus
-      auth = catalog.readSelectedAuthIfUnchanged(target)
-      session = await ssh.connectVerified(target, auth, exec.signal)
+      current = sessions.lookup(owner, target.id)
+      if current exists:
+        if current.mode == input.mode: return await current.readyStatus
+        fail(&quot;This target has a connection or pending attempt in another mode&quot;)
+      if input.mode == harness:
+        ref = references.issueFromApproval(owner, exec.callId, approvedTarget, connectDeadline)
+        session = await harnessSsh.open(owner, exec.callId, target.publicEndpoint, ref, exec.signal)
+      else:
+        auth = catalog.readSelectedAuthIfUnchanged(target)
+        session = await pluginSsh.connectVerified(target, auth, exec.signal)
       commitIfLiveOrClose(owner, target, session, exec.signal)
     return target.publicEndpoint and ready
 
@@ -243,6 +270,20 @@
     await authorizeExactCommand(owner, session.publicEndpoint, input.command, exec)
     job = jobs.startOwned(owner, callId, start: registerChannelIfSameInstance(session, input))
     return job.previewOnCompletionOrReadableOverflow(3000, exec.signal)
+
+connection-reference.ts
+  useForApprovedTarget(ref, owner, callId, endpoint, signal, authenticate):
+    claim = issued.requireMatchingLiveClaim(ref, owner, callId, endpoint, clock.now())
+    issued.delete(ref)
+    await verifyDatabaseAndTargetRevision(claim, signal)
+    requireStillLiveAndBeforeDeadline(claim, signal)
+    return authenticate(claim.endpoint, readSelectedAuth(claim), claim.fingerprint, claim.deadline)
+
+harness-ssh.ts
+  open(owner, callId, endpoint, ref, signal):
+    return references.useForApprovedTarget(ref, owner, callId, endpoint, signal,
+      (target, auth, fingerprint, deadline) -&gt;
+        establishAndOwnVerifiedClient(target, auth, fingerprint, remaining(deadline), signal))
 </code></pre></section>
   </main>
   <script type="module">

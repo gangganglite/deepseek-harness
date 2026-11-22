@@ -10,16 +10,31 @@
   zh: a23d75dc5007dc62
 /deepseek-ai-dsh-tool-xterminal/summary:
   en: 91f443e8962e4f91
-  zh: 6e93df7ddb57d795
+  zh: 1ea2012c19c75933
+/deepseek-ai-dsh-tool-xterminal/table-of-contents:
+  en: 2e89ddb1e73218cb
+  zh: a70afa71a4f6f2ee
 /deepseek-ai-dsh-tool-xterminal/use-this-package:
-  en: 9e8181418388b6f0
-  zh: 3d731684f025cdfb
+  en: 3b25df30e9a53c1b
+  zh: 6471e67f06d81f03
 /deepseek-ai-dsh-tool-xterminal/model-experience:
-  en: 025647e17a582e3c
-  zh: 90b78da1849903dc
-/deepseek-ai-dsh-tool-xterminal/model-experience/kv-cache-effect:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-tool-xterminal/model-experience/tool-schemas-and-results:
+  en: cadc497841430a21
+  zh: 3fb70f19674eab54
+/deepseek-ai-dsh-tool-xterminal/model-experience/tool-schemas-and-results/what-the-model-sees:
+  en: fef4a186c835c621
+  zh: 5adb07721a6c59f0
+/deepseek-ai-dsh-tool-xterminal/model-experience/tool-schemas-and-results/token-effect:
+  en: 17b66d005efb09c9
+  zh: baf49a2fe6ad88db
+/deepseek-ai-dsh-tool-xterminal/model-experience/tool-schemas-and-results/kv-cache-effect:
   en: 5cf768bc3538b1d0
   zh: 454adaeba0d0d029
 /deepseek-ai-dsh-tool-xterminal/known-limitations-and-deferred-work:
-  en: a4801312e4e6176b
-  zh: 202c996ed42c8d96
+  en: 8ff3300c04cf2ee0
+  zh: 31cd8be48e5b7434
+/deepseek-ai-dsh-tool-xterminal/known-limitations-and-deferred-work/dev-note:
+  en: 0a1253c6f7b5e8b9
+  zh: 9f56528562c7c914

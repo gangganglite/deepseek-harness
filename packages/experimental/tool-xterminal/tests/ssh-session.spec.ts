@@ -5,9 +5,14 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
+import { DatabaseSync } from 'node:sqlite'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Server, utils } from 'ssh2'
 import { expect, it } from 'vitest'
+import { catalogIdentity, resolveSavedServer } from '../src/catalog.ts'
 import { captureCommand, type CommandPreview } from '../src/command-output.ts'
+import { ConnectionReferences, type ConnectionCall } from '../src/connection-reference.ts'
+import { openHarnessConnection } from '../src/harness-ssh.ts'
 import { connectVerified } from '../src/ssh-session.ts'
 
 function keyPair() {
@@ -26,8 +31,15 @@ function publicKeyBytes(privateKey: string): Buffer {
 
 it('authenticates a password and a private key only after verifying the host', async () => {
   const host = keyPair()
-  const user = keyPair()
-  const userKey = publicKeyBytes(user.privateKey)
+  const passphrase = 'fixture-private-key-passphrase'
+  const user = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem', cipher: 'aes-256-cbc', passphrase },
+    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  })
+  const parsedKey = utils.parseKey(user.privateKey, passphrase)
+  if (parsedKey instanceof Error || Array.isArray(parsedKey)) throw new Error('Expected an encrypted fixture key')
+  const userKey = parsedKey.getPublicSSH()
   const fingerprint = `SHA256:${createHash('sha256').update(publicKeyBytes(host.privateKey)).digest('base64').replace(/=+$/, '')}`
   const methods: string[] = []
   const server = new Server({ hostKeys: [host.privateKey] }, (client) => {
@@ -40,17 +52,20 @@ it('authenticates a password and a private key only after verifying the host', a
       if (auth.method === 'password' && auth.password === 'fixture-password') return auth.accept()
       if (auth.method === 'publickey' && auth.key.data.equals(userKey)) {
         if (!auth.signature) return auth.accept()
-        const key = utils.parseKey(user.privateKey)
-        if (
-          !(key instanceof Error) && !Array.isArray(key) && auth.blob !== undefined
-          && key.verify(auth.blob, auth.signature, auth.hashAlgo) === true
-        ) {
+        if (auth.blob !== undefined && parsedKey.verify(auth.blob, auth.signature, auth.hashAlgo) === true) {
           return auth.accept()
         }
       }
       auth.reject(['password', 'publickey'])
     })
+    client.on('session', accept => accept().on('exec', (acceptCommand) => {
+      const stream = acceptCommand()
+      stream.write('fixture-marker\n')
+      stream.exit(0)
+      stream.end()
+    }))
   })
+  const root = await mkdtemp(join(tmpdir(), 'dsh-xterminal-authentication-'))
   try {
     await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
     const address = server.address()
@@ -58,10 +73,11 @@ it('authenticates a password and a private key only after verifying the host', a
     const target = { title: 'Fixture', host: '127.0.0.1', port: address.port }
     const signal = new AbortController().signal
     const password = { username: 'fixture-user', password: 'fixture-password' }
+    const privateKey = { username: password.username, privateKey: user.privateKey, passphrase }
     await expect(connectVerified(target, password, 'SHA256:wrong', 2000, signal))
       .rejects.toMatchObject({ code: 'XTERMINAL_HOST_KEY_MISMATCH' })
     expect(methods).toEqual([])
-    for (const auth of [password, { username: 'fixture-user', privateKey: user.privateKey }]) {
+    for (const auth of [password, privateKey]) {
       const client = await connectVerified(target, auth, fingerprint, 2000, signal)
       const close = once(client, 'close')
       client.end()
@@ -69,8 +85,56 @@ it('authenticates a password and a private key only after verifying the host', a
     }
     expect(methods).toContain('password')
     expect(methods).toContain('publickey')
+
+    const path = join(root, 'local-store.db')
+    using db = new DatabaseSync(path)
+    db.exec('CREATE TABLE local_store (store_key TEXT, item_id TEXT, updated_at INTEGER, payload TEXT)')
+    const insert = db.prepare('INSERT INTO local_store VALUES (?, ?, ?, ?)')
+    const references = new ConnectionReferences()
+    const call = {
+      agent: {} as Agent,
+      session: {} as Agent['session'],
+      turn: 1,
+      callId: 'approved-call' as ConnectionCall['callId'],
+      token: Symbol() as ConnectionCall['token'],
+    }
+    const localAuthentication = [
+      { authType: 'password', ...password },
+      { authType: 'privateKey', ...privateKey },
+    ]
+    methods.length = 0
+    for (const auth of localAuthentication) {
+      db.exec('DELETE FROM local_store')
+      insert.run('GeneralDatabaseServerImp-ServerDatabaseServerImp', 'server-1', 1, JSON.stringify({ ...target, ...auth }))
+      const selection = { path, file: await catalogIdentity(path), target: resolveSavedServer(path, target) }
+      const reference = references.issue(call, selection, fingerprint, 2000, signal)
+      const client = await openHarnessConnection(references, reference, call, target)
+      try {
+        const preview = Promise.withResolvers<CommandPreview>()
+        const done = captureCommand(client, 'fixture-command', join(root, 'command.txt'), AbortSignal.timeout(2000),
+          'fixture-job', preview.resolve, () => undefined)
+        await expect(preview.promise).resolves.toEqual({ text: 'fixture-marker\n' })
+        await expect(done).resolves.toEqual({ status: 'completed', exitCode: 0 })
+      } finally {
+        const close = once(client, 'close')
+        client.end()
+        await close
+      }
+    }
+    expect(methods).toContain('password')
+    expect(methods).toContain('publickey')
+
+    db.exec('DELETE FROM local_store')
+    insert.run('GeneralDatabaseServerImp-ServerDatabaseServerImp', 'server-1', 1,
+      JSON.stringify({ ...target, authType: 'privateKey', ...privateKey, passphrase: 'wrong-fixture-passphrase' }))
+    const selection = { path, file: await catalogIdentity(path), target: resolveSavedServer(path, target) }
+    const reference = references.issue(call, selection, fingerprint, 2000, signal)
+    await expect(openHarnessConnection(references, reference, call, target)).rejects.toMatchObject({
+      name: 'XTerminalSshError', code: 'XTERMINAL_AUTH_UNAVAILABLE',
+    })
   } finally {
     await new Promise<void>((resolve) => { server.close(() => resolve()) })
+    await rm(root, { recursive: true, force: true })
   }
 })
 

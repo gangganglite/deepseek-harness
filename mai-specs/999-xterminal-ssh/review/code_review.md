@@ -1,5 +1,26 @@
 # 代码评审 · Feature 999
 
+## 临时连接引用 · 有条件合并
+
+临时引用切片通过隔离环境的代码复核。`xterminal_connect` 默认插件建连，显式 `mode: "harness"` 时经本机一次性引用建连。两种模式的命令都使用原任务的 `xterminal_run`。本轮无新增未关闭 P0 或 P1。合并前仍需处理仓库文档门禁列出的既有问题。真实 XTerminal 的密码、私钥及口令读取仍待业务验收，Feature 保留待验。
+
+### 评审范围
+
+在仓库根目录，以题为 `feat：xterminal插件修复指纹校验问题` 的 HEAD 为比较基线，基线 Git 树对象为 `c1ef67295b8afa97d23e8dc40c45533d8b1aed22`。暂存区为空。复核未暂存和新增的插件、聚焦测试、会话快照、README 及工具目录共 20 个文件，按路径排序的文件 SHA-256 清单摘要为 `e557c6ea53a42864ce6cf5daa1cb34828f66c86c2b0a9547bbf07d06e49eb780`。验收依据为 [AC-2、AC-4、AC-6 和 AC-8](../spec/PRD.md#验收条件)及[已确认的 Harness 建连方案](../design/TECH_DESIGN.md#harness-通过临时引用建连)。
+
+### 实现与运行证据
+
+- **签发、兑付和隔离。** [建连入口](../../../packages/experimental/tool-xterminal/src/remote-tools.ts#L199)先审批再签发，[引用表](../../../packages/experimental/tool-xterminal/src/connection-reference.ts#L71)核对 Agent 实例、Session、turn、调用及端点，在异步文件校验前消费引用。聚焦用例覆盖过期、撤销、重放、并发兑付、跨归属、替换端点、数据库文件替换及行修订变化。无密钥 Session 快照记录 Harness 模式入参与拒绝审批的工具错误。成功建连的隔离探针核对模型请求、进程输出与 Session 均未出现合成认证哨兵。
+- **两种模式与审批并行。** 隔离 `dsh --profile headless` 分别加载源码与构建包，使用密码和带口令私钥在回环 SSH 服务建连，并通过 `xterminal_run` 取回预设标记。待建和就绪连接均验证同模式复用及另一模式冲突，交换了先发模式。受控审批挂起 A 的命令，夹具先收到 B 的命令再批准 A。批准后 A 在原连接执行一次。拒绝连接的目标没有收到 TCP 连接。
+- **连接释放。** [Agent 与插件清理](../../../packages/experimental/tool-xterminal/src/remote-tools.ts#L148)会取消并等待待建连接、命令及本机输出收尾。隔离 profile 在握手、命令两个暂停点分别执行插件卸载与 Agent 取消后销毁作用域，确认连接关闭和工具失败。正常命令测试同时核对 turn 完成后各测试连接均关闭。
+- **修复命令退出状态监听。** 回环验证复现了服务端紧接 exec 确认发送输出和退出状态时，两种模式都可能返回 `XTERMINAL_COMMAND_RESULT_UNKNOWN`。[命令采集](../../../packages/experimental/tool-xterminal/src/command-output.ts#L75)现于 exec 回调中安装监听。回归测试验证短命令成功返回标记及退出码 0，并保留远端拒绝和长输出早返回用例。
+
+### 检查结果与待验项
+
+- 使用 Node v24.22.3，`vitest run packages/experimental/tool-xterminal/tests` 通过 20 项。`pnpm run test:snapshot snapshots/session/headless.snapshot.ts -t 'xterminal-harness-approval|gives every composition'` 通过 2 项。`pnpm run build:artifacts` 与随后的 `pnpm run build:check` 共通过 10 项。改动范围 lint、`pnpm run verify-tool-catalog` 和 `git diff --check` 通过。
+- `pnpm run test:docs` 通过 19 项，2 项仍因 `mai-specs/README.md` 缺少双语配对、Feature 历史文档中的提交引用及插件清单的旧仓库 URL 失败。
+- 真实 XTerminal 库与目标服务器的两种认证、原会话跨 turn 读回未完成长输出及 GUI profile 中的实际审批体验仍待验。PRD 的 AC-6 条件措辞和 AC-7 的提前返回时序仍待同步。历史命令取消和断线分类的处理决定见下文。
+
 ## 本轮复评 · 远端拒绝修复通过
 
 明确拒绝 exec 时，Harness 现已正确返回结构化失败。默认命令超时仍为审批后的 120 秒。需求负责人接受启动确认前断线时的错误分类风险，本轮修复通过复评。上轮取消竞态按需求负责人选择暂缓，原验收条目仍需同步。Feature 的整体交付证据仍待补齐。

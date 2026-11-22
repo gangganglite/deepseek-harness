@@ -1,20 +1,27 @@
 # 技术方案 · XTerminal 任务连接
 
-> Feature 999 | Profile simple | 待评审 | 代码基线 f607b270c5，工作区含未验证的查询插件 | 模板 .agents/skills/my-create-design/assets/templates/TECH_DESIGN.simple.tmpl.md
+> Feature 999 | Profile simple | 待评审 | 代码基线 66b2eda725，工作区含本机指纹回退与组合包改动 | 模板 .agents/skills/my-create-design/assets/templates/TECH_DESIGN.simple.tmpl.md
 
 [返回 BRIEF](../BRIEF.md) · [有效需求与 AC](../spec/PRD.md#验收条件)
 
 ## 需求依据
 
-PRD 统一维护 AC-1 至 AC-8。早期技术方案与[早期评审](../review/design_review.md)针对只读查询。保留该方案的查询投影、分页、结构化错误和回放验证。任务连接、凭据使用和路径更新按本方案重新评审。
+PRD 维护 AC-1 至 AC-8。本轮会话明确将临时连接引用纳入交付，沿用 AC-6。PRD 该项及业务测试计划中的条件措辞待同步。两条连接路径都要完成密码和私钥认证及任务接续。
 
 ## 最小实现方案
 
 继续使用 `packages/experimental/tool-xterminal`，首版用 TypeScript 和现有 Node.js。保留 `xterminal_search_servers`。新增首次路径补录、建立连接和使用连接的独立工具。只有当前任务需要访问服务器时才调用建连工具。任一远程操作仍走 Harness 工具权限管线，部署必须能向用户展示并确认已选目标和具体命令。没有可用审批时拒绝受控操作。
 
-现有 [SshConnection](../../../packages/ssh/ssh/src/index.ts) 启动 OpenSSH master，再启动部署指定的远端 Helper 并校验摘要。它没有接收外部会话的入口。插件首选使用经实测的 Node SSH 客户端，候选为 `ssh2`，在插件内部完成认证。Harness 的普通工具调用通过本插件使用已建立的会话。同一个 Agent 在当前 turn 可持有多个目标会话。独立远程命令工具要求每次显式提供目标，不维护默认会话。普通 Bash、文件、终端和 PTC 执行位置保持由各自配置控制。现有 `dsh-ssh` 无需改动，也无需服务器安装 Helper。
+`xterminal_connect` 默认由插件直接建立连接。显式指定 `mode: "harness"` 时，由 Harness 本机 SSH 执行器发起并持有连接，XTerminal 插件用临时引用提供认证。两种模式都通过现有 `xterminal_run` 使用已批准目标的会话，复用并行调度、作业和输出续读。失败后需要显式发起新调用，避免自动重试。工具只返回目标与连接状态。
 
-备选临时连接引用只在首选交接验证无法通过时进入设计评审。若启用备选，引用仅在本机进程间或服务间传递，绑定 Agent、Session、turn、目标与期限。插件负责兑付、认证和关闭，模型工具返回只含脱敏目标及连接状态。首选方案无需签发、持久化或回收此类引用。
+现有 [`SshConnection`](../../../packages/ssh/ssh/src/index.ts) 在 profile 启动时以固定 OpenSSH 别名启动 master，再连接部署指定的远端 Helper。当前消费者共享该 profile 的固定执行位置。任务内的 Host 侧 SSH 执行器与 XTerminal 工具同包交付，共用 `ssh2`、主机验证及输出采集。普通 Bash、文件与终端使用各自的 profile 执行位置。临时引用路径无需预配 OpenSSH 别名或远端 Helper。
+
+### Harness 通过临时引用建连
+
+1. **签发。** `xterminal_connect(mode: "harness")` 复用目标解析与建连审批。获批后，插件签发一个同进程的 `Symbol` 引用。插件实例的引用表绑定 Agent 实例、Session、turn、批准调用、目标记录及修订、数据库文件标识、可信主机指纹和截止时间。复用建连超时作为期限，从签发开始计时。签发只记录绑定信息，认证字段在兑付前留在数据库中。
+2. **兑付。** Harness 执行器在当前调用把引用交回插件。插件核对引用、任务归属、调用及目标，检查期限与取消状态。在首个异步步骤前移除引用，使每个引用最多开启一次认证。绑定不匹配、重复、过期或已撤销时返回固定错误。异步校验数据库后重新检查调用存活状态与期限，通过后才读取目标的认证字段。
+3. **本机认证。** 插件只向认证回调提供选中记录的密码或私钥及必要口令。Harness 执行器创建并管理自己的 SSH 客户端，使用引用绑定的目标、指纹和剩余期限完成主机验证与认证。凭据和引用均不进入模型参数、工具返回、日志、Session、argv、环境变量和临时文件。认证失败后关闭待建连接，一次新尝试需要新的批准和引用。
+4. **会话归属。** 会话登记保存 Agent、turn、目标、模式及最小 SSH 接口。相同目标与模式的建连请求复用待建或就绪连接。不同模式对同一活动目标返回冲突，连接失效或下一 turn 时可重新发起。连接成功但调用已无效时，由启动者关闭连接并等待结束。调用结束撤销未消费引用，turn 结束撤销该 turn 的引用并收回连接入口，已启动的作业按现有约定收尾。Agent 销毁或插件卸载时，撤销引用、取消并等待待建连接与在途作业释放资源。
 
 ### 路径发现与更新
 
@@ -53,7 +60,7 @@ A、B 各用自己的 SSH 连接。B 已连接就复用，需要连接时可在�
 
 ## 供评审的代码设计
 
-以下为拟议伪代码。省略注册样板与库 API 适配，尚未验证本机认证及工具调用链。
+以下为方案示意。插件直接建连已有隔离验证，Harness 发起连接的分支及其生命周期仍待验证。
 
 ```text
 index.ts
@@ -65,9 +72,16 @@ index.ts
     await authorizeExactTarget(owner, target.publicEndpoint, exec)
     runSerially(owner, target.id):
       requireStillLive(owner, exec.signal)
-      if sessions.hasCurrent(owner, target): return publicStatus
-      auth = catalog.readSelectedAuthIfUnchanged(target)
-      session = await ssh.connectVerified(target, auth, exec.signal)
+      current = sessions.lookup(owner, target.id)
+      if current exists:
+        if current.mode == input.mode: return await current.readyStatus
+        fail("This target has a connection or pending attempt in another mode")
+      if input.mode == harness:
+        ref = references.issueFromApproval(owner, exec.callId, approvedTarget, connectDeadline)
+        session = await harnessSsh.open(owner, exec.callId, target.publicEndpoint, ref, exec.signal)
+      else:
+        auth = catalog.readSelectedAuthIfUnchanged(target)
+        session = await pluginSsh.connectVerified(target, auth, exec.signal)
       commitIfLiveOrClose(owner, target, session, exec.signal)
     return target.publicEndpoint and ready
 
@@ -77,9 +91,23 @@ index.ts
     await authorizeExactCommand(owner, session.publicEndpoint, input.command, exec)
     job = jobs.startOwned(owner, callId, start: registerChannelIfSameInstance(session, input))
     return job.previewOnCompletionOrReadableOverflow(3000, exec.signal)
+
+connection-reference.ts
+  useForApprovedTarget(ref, owner, callId, endpoint, signal, authenticate):
+    claim = issued.requireMatchingLiveClaim(ref, owner, callId, endpoint, clock.now())
+    issued.delete(ref)
+    await verifyDatabaseAndTargetRevision(claim, signal)
+    requireStillLiveAndBeforeDeadline(claim, signal)
+    return authenticate(claim.endpoint, readSelectedAuth(claim), claim.fingerprint, claim.deadline)
+
+harness-ssh.ts
+  open(owner, callId, endpoint, ref, signal):
+    return references.useForApprovedTarget(ref, owner, callId, endpoint, signal,
+      (target, auth, fingerprint, deadline) ->
+        establishAndOwnVerifiedClient(target, auth, fingerprint, remaining(deadline), signal))
 ```
 
-仅独立连接与远程命令工具声明并行，路径补录仍由文件锁保护。工具调用取消若发生在返回前，应取消已创建的作业，工具成功返回后由作业生命周期继续管理。认证数据类型保留在 `catalog.ts` 到 `ssh-session.ts` 的内部接口，工具定义只依赖目标投影。预期故障转换为固定 `HarnessError` 名称与错误码，避免附加原始错误。
+仅独立连接与远程命令工具声明并行，路径补录仍由文件锁保护。工具调用取消若发生在返回前，应取消已创建的作业，工具成功返回后由作业生命周期继续管理。认证数据类型留在本地目录读取和两个认证消费者的内部接口，工具定义只接收目标和连接模式。预期故障转换为固定 `HarnessError` 名称与错误码，避免附加原始错误。
 
 ## 实施任务与验证
 
@@ -88,6 +116,8 @@ index.ts
 | 复用查询并处理路径 | `catalog.ts`、拟新增 `database-path.ts` | AC-1、AC-2、AC-3、AC-5 | 合成库验证投影、空表、分页、损坏、链接逃逸、并发首次补录、已有配置拒绝覆盖及重启复用。真实本机库只做脱敏查询冒烟。 |
 | 验证认证和主机身份 | `catalog.ts`、拟新增 `ssh-session.ts`、依赖声明 | AC-2、AC-4、AC-6 | 合成库和隔离 SSH 服务验证密码及私钥两种建连、错误口令、未知或变化主机密钥。用本机支持的方式核实实际 XTerminal 认证记录可取得。 |
 | 接通原任务 | `index.ts`、`ssh-session.ts`、显式 Cordis overlay | AC-3、AC-4、AC-6、AC-8 | 真实 `dsh` profile 用录制或模拟模型驱动两种认证的任务接续。验证无审批、受控审批下同批 A 被挂起、B 独立执行及 A 仅在原连接执行、同目标并发、原实例关闭、重复调用、取消、断线、卸载与跨 turn 拒用。 |
+| 签发和兑付本机引用 | 拟新增 `connection-reference.ts`，复用 `catalog.ts`、`host-trust.ts` 和审批调用 | AC-2、AC-3、AC-6 | 用合成记录验证按批准调用兑付。验证过期、重复或并发兑付、跨 Agent / Session / turn、替换目标及数据库记录变化被拒绝。确认失败路径未将凭据交给认证消费者。 |
+| 交付 Harness 发起连接 | 拟新增 `harness-ssh.ts`，修改 `remote-tools.ts` 与会话登记 | AC-2、AC-4、AC-6、AC-8 | 启动隔离 `dsh` profile，显式选择 Harness 模式。两种认证均由 Host 执行器创建连接，并用现有命令工具继续任务。验证不同目标的两种模式共存、同目标模式冲突、认证失败与卸载，检查模型请求、日志及持久化内容。 |
 | 限长展示与续读 | 拟新增 `command-output.ts`、jobs 配置及文件读回 | AC-2、AC-7 | 验证 3000 字边界、中文及 emoji、跨块解码、提前返回后续读、运行中读到文件末尾、完整文件读回与元数据发布、部分输出标记、作业跨 turn 收尾、文件保留与存储失败。 |
 | 完成发布面与快照 | 包 README、构建配置、keyless snapshot | AC-1 至 AC-8 | 检查模型请求、工具结果、日志及 Session 无认证哨兵与连接引用，完成聚焦测试及产物构建检查。 |
 
@@ -95,4 +125,4 @@ index.ts
 
 ## 实施前待验证
 
-现已核对现有 SSH 部署入口、工具注册、审批接口和原查询代码。真实库先前只核验了记录字段和类型。实施前应验证两种凭据的本机可用性，验证候选 SSH 客户端的主机身份校验，并用隔离环境演示已建立连接可以完成一次 Harness 任务操作。此次为文档设计，以上运行验证尚未执行。早期只读查询评审不覆盖新能力。
+首选路径已有隔离 profile 的密码、私钥和命令接续证据。实际 XTerminal 目标的端到端认证仍待验证。新路径先在隔离 profile 验证同进程引用兑付、Host 执行器建连和一条只输出标记的命令，并覆盖引用过期与关闭后不可用。临时引用的实现、生命周期核对和隔离运行验证仍待完成。

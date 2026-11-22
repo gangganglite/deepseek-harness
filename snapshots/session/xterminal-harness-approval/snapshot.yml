@@ -1,0 +1,9 @@
+version: 1
+scenario: xterminal-harness-approval
+profile: headless
+composition: default
+recording: authored
+header:
+  class: xterminal-harness-approval
+  pin: true
+  systemPromptSource: text-turn

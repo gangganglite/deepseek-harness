@@ -55,6 +55,7 @@
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`、`ctx.workflowEngine`、`ctx.systemPrompt`、`a calling Agent (exec.agent parents the script children)` | `tool/call`、`tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-workspace-dependencies` | `load_workspace_dependencies` | `ctx.tools` | `tool/call`, `tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`、`web_search` | `ctx.tools`、`ctx.web`、`ctx.systemPrompt` | `tool/call`、`tool/result` | - | web_search 和 web_fetch 将提供方选择置于 ctx.web 之后，使模型可见 schema 在更换后端时保持稳定。 |
+| `@deepseek-ai/dsh-tool-xterminal` | `xterminal_connect`, `xterminal_run`, `xterminal_search_servers`, `xterminal_set_database_path` | `ctx.tools`, `ctx.profileContext`, `ctx.agents`, `ctx.approval`, `ctx.jobs` | `tool/call`, `approval/asked`, `approval/decided`, `job/registered`, `job/settled`, `tool/result` | - | - |
 
 <a id="deepseek-aidsh-plugin-manager"></a>
 
@@ -2855,3 +2856,129 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
 来源：[`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search 和 web_fetch 将提供方选择置于 ctx.web 之后，使模型可见 schema 在更换后端时保持稳定。
+
+<a id="deepseek-aidsh-tool-xterminal"></a>
+
+## `@deepseek-ai/dsh-tool-xterminal`
+
+### `xterminal_connect`
+
+请求批准连接到 XTerminal 已保存的目标，以便在当前任务中调用 `xterminal_run`。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Exact saved server name."
+    },
+    "host": {
+      "type": "string",
+      "description": "Exact saved server host."
+    },
+    "port": {
+      "type": "integer",
+      "description": "Exact saved server port."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Defaults to plugin. Set harness when the task requires Harness to initiate the connection.",
+      "enum": [
+        "plugin",
+        "harness"
+      ]
+    }
+  },
+  "required": [
+    "title",
+    "host",
+    "port"
+  ]
+}
+```
+
+来源：[`packages/experimental/tool-xterminal/src/remote-tools.ts`](../packages/experimental/tool-xterminal/src/remote-tools.ts)
+
+### `xterminal_run`
+
+在明确指定的已连接目标上执行命令。长输出可能在返回预览后继续写入。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Exact saved server name."
+    },
+    "host": {
+      "type": "string",
+      "description": "Exact saved server host."
+    },
+    "port": {
+      "type": "integer",
+      "description": "Exact saved server port."
+    },
+    "command": {
+      "type": "string",
+      "description": "Command to execute on this target."
+    }
+  },
+  "required": [
+    "title",
+    "host",
+    "port",
+    "command"
+  ]
+}
+```
+
+来源：[`packages/experimental/tool-xterminal/src/remote-tools.ts`](../packages/experimental/tool-xterminal/src/remote-tools.ts)
+
+### `xterminal_search_servers`
+
+查找 XTerminal 已保存的服务器，返回名称、主机和端口。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Literal substring of the server name or host, up to 256 characters. Omit to list servers."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Number of servers per page, from 1 to 50. Defaults to 20."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Use nextOffset from the previous result with the same query. Defaults to 0."
+    }
+  }
+}
+```
+
+来源：[`packages/experimental/tool-xterminal/src/index.ts`](../packages/experimental/tool-xterminal/src/index.ts)
+
+### `xterminal_set_database_path`
+
+自动发现失败时，配置本机 XTerminal 数据库。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path to the XTerminal SQLite database."
+    }
+  },
+  "required": [
+    "path"
+  ]
+}
+```
+
+来源：[`packages/experimental/tool-xterminal/src/index.ts`](../packages/experimental/tool-xterminal/src/index.ts)

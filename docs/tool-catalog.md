@@ -51,6 +51,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-tool-workflow` | `workflow` | `ctx.tools`, `ctx.workflowEngine`, `ctx.systemPrompt`, `a calling Agent (exec.agent parents the script children)` | `tool/call`, `tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-workspace-dependencies` | `load_workspace_dependencies` | `ctx.tools` | `tool/call`, `tool/result` | - | - |
 | `@deepseek-ai/dsh-tool-web` | `web_fetch`, `web_search` | `ctx.tools`, `ctx.web`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps. |
+| `@deepseek-ai/dsh-tool-xterminal` | `xterminal_connect`, `xterminal_run`, `xterminal_search_servers`, `xterminal_set_database_path` | `ctx.tools`, `ctx.profileContext`, `ctx.agents`, `ctx.approval`, `ctx.jobs` | `tool/call`, `approval/asked`, `approval/decided`, `job/registered`, `job/settled`, `tool/result` | - | - |
 
 <a id="deepseek-aidsh-plugin-manager"></a>
 
@@ -2848,3 +2849,129 @@ Search the web for current information. Returns an optional summary answer and a
 Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/index.ts)
 
 web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.
+
+<a id="deepseek-aidsh-tool-xterminal"></a>
+
+## `@deepseek-ai/dsh-tool-xterminal`
+
+### `xterminal_connect`
+
+Request approval to connect to a saved XTerminal target for use with xterminal_run in the current task.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Exact saved server name."
+    },
+    "host": {
+      "type": "string",
+      "description": "Exact saved server host."
+    },
+    "port": {
+      "type": "integer",
+      "description": "Exact saved server port."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Defaults to plugin. Set harness when the task requires Harness to initiate the connection.",
+      "enum": [
+        "plugin",
+        "harness"
+      ]
+    }
+  },
+  "required": [
+    "title",
+    "host",
+    "port"
+  ]
+}
+```
+
+Source: [`packages/experimental/tool-xterminal/src/remote-tools.ts`](../packages/experimental/tool-xterminal/src/remote-tools.ts)
+
+### `xterminal_run`
+
+Run a command on an explicit connected XTerminal target. Long output may continue writing after the preview.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Exact saved server name."
+    },
+    "host": {
+      "type": "string",
+      "description": "Exact saved server host."
+    },
+    "port": {
+      "type": "integer",
+      "description": "Exact saved server port."
+    },
+    "command": {
+      "type": "string",
+      "description": "Command to execute on this target."
+    }
+  },
+  "required": [
+    "title",
+    "host",
+    "port",
+    "command"
+  ]
+}
+```
+
+Source: [`packages/experimental/tool-xterminal/src/remote-tools.ts`](../packages/experimental/tool-xterminal/src/remote-tools.ts)
+
+### `xterminal_search_servers`
+
+Find saved XTerminal servers and return their names, hosts, and ports.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Literal substring of the server name or host, up to 256 characters. Omit to list servers."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Number of servers per page, from 1 to 50. Defaults to 20."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Use nextOffset from the previous result with the same query. Defaults to 0."
+    }
+  }
+}
+```
+
+Source: [`packages/experimental/tool-xterminal/src/index.ts`](../packages/experimental/tool-xterminal/src/index.ts)
+
+### `xterminal_set_database_path`
+
+Configure the local XTerminal database when automatic discovery could not find it.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute path to the XTerminal SQLite database."
+    }
+  },
+  "required": [
+    "path"
+  ]
+}
+```
+
+Source: [`packages/experimental/tool-xterminal/src/index.ts`](../packages/experimental/tool-xterminal/src/index.ts)

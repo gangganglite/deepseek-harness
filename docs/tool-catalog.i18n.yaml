@@ -9,8 +9,8 @@
   en: 6cc2cd9ced70bb09
   zh: 1c0e6cb4ba2ed637
 /tool-schema-catalog/tool-package-map:
-  en: ddb1e263463e9ecd
-  zh: 1eb008f18b500dc3
+  en: 351ec474b0fd9e4b
+  zh: 1a0dc505c016ed00
 /tool-schema-catalog/deepseek-ai-dsh-plugin-manager:
   en: e0143916bb634762
   zh: e0143916bb634762
@@ -348,5 +348,20 @@
   en: 8673f203aea9bdf2
   zh: 4e17783ffdf34c83
 /tool-schema-catalog/deepseek-ai-dsh-tool-web/web-search:
-  en: cc1ad38bf0006710
-  zh: 324eacb827a09e93
+  en: fb508937f35e6f84
+  zh: e154efe22f3aa330
+/tool-schema-catalog/deepseek-ai-dsh-tool-xterminal:
+  en: be2708735bbaa388
+  zh: be2708735bbaa388
+/tool-schema-catalog/deepseek-ai-dsh-tool-xterminal/xterminal-connect:
+  en: b35fd3dba0583b87
+  zh: 82c926d6edeadd2d
+/tool-schema-catalog/deepseek-ai-dsh-tool-xterminal/xterminal-run:
+  en: 4bf41b389011647c
+  zh: bade99d5c787ce00
+/tool-schema-catalog/deepseek-ai-dsh-tool-xterminal/xterminal-search-servers:
+  en: e351753c37c08108
+  zh: 18730bb782df7ef0
+/tool-schema-catalog/deepseek-ai-dsh-tool-xterminal/xterminal-set-database-path:
+  en: 5eea28a6e027c11c
+  zh: 44bd54843eaf562f

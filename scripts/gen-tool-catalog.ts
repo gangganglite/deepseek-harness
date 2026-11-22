@@ -9,6 +9,7 @@
 import { globSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
+import type { ProfileContext } from '@deepseek-ai/dsh-app-boot'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -36,6 +37,7 @@ import * as ToolWorktree from '@deepseek-ai/dsh-experimental-tool-worktree'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import PlanModeController from '@deepseek-ai/dsh-plan-mode'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import DeepSeekAuth from '@deepseek-ai/dsh-deepseek-auth'
@@ -70,6 +72,7 @@ import * as ToolLsp from '@deepseek-ai/dsh-tool-lsp'
 import * as ToolSkill from '@deepseek-ai/dsh-tool-skill'
 import * as ToolSessionQuery from '@deepseek-ai/dsh-tool-session-query'
 import * as ToolSessionList from '@deepseek-ai/dsh-tool-session-list'
+import * as ToolXTerminal from '@deepseek-ai/dsh-tool-xterminal'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import * as ToolJobs from '@deepseek-ai/dsh-tool-jobs'
 import BrowserUseRegistry from '@deepseek-ai/dsh-browser-use'
@@ -763,6 +766,31 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'web_search and web_fetch keep provider selection behind ctx.web so model-visible schemas stay stable across backend swaps.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-xterminal',
+    dir: 'tool-xterminal',
+    source: {
+      xterminal_connect: 'packages/experimental/tool-xterminal/src/remote-tools.ts',
+      xterminal_run: 'packages/experimental/tool-xterminal/src/remote-tools.ts',
+      xterminal_search_servers: 'packages/experimental/tool-xterminal/src/index.ts',
+      xterminal_set_database_path: 'packages/experimental/tool-xterminal/src/index.ts',
+    },
+    requires: ['ctx.tools', 'ctx.profileContext', 'ctx.agents', 'ctx.approval', 'ctx.jobs'],
+    writes: ['tool/call', 'approval/asked', 'approval/decided', 'job/registered', 'job/settled', 'tool/result'],
+    async mount(ctx) {
+      const home = resolve(root, '.tmp/tool-catalog/.dsh')
+      const dir = resolve(home, 'profiles/tool-catalog')
+      ctx.provide('profileContext', {
+        name: 'tool-catalog', dir, home, cwd: root, patchPath: resolve(dir, 'cordis.patch.yml'), installAnchor: dir,
+        startedBundles: [], overlayPaths: [], telemetryDisabledEnv: '1',
+      } satisfies ProfileContext)
+      await ctx.plugin(SessionStore)
+      await ctx.plugin(AgentRegistry)
+      await ctx.plugin(ApprovalService, { policy: 'never' })
+      await ctx.plugin(LocalJobRegistry)
+      await ctx.plugin(ToolXTerminal, { outputRetentionDays: 0 })
+    },
   },
 ]
 

@@ -1,21 +1,23 @@
 /** Task-scoped SSH connection and command tools for the local XTerminal catalog. */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { HarnessError } from '@deepseek-ai/dsh-error'
 import type { JobId, JobOutcome } from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { defineTool, ToolArgsError, ToolContextUnavailableError, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Client } from 'ssh2'
-import { readServerAuthentication, resolveSavedServer, type ServerEndpoint } from './catalog.ts'
+import { catalogIdentity, readServerAuthentication, resolveSavedServer, verifyCatalogIdentity, type ServerEndpoint } from './catalog.ts'
 import { captureCommand, type CommandPreview } from './command-output.ts'
+import { ConnectionReferences } from './connection-reference.ts'
+import { openHarnessConnection } from './harness-ssh.ts'
 import { readXTerminalHostFingerprint } from './host-trust.ts'
-import { connectVerified } from './ssh-session.ts'
 import { pruneClosedOutputs } from './output-files.ts'
+import { XTerminalRemoteError } from './remote-error.ts'
+import { connectVerified } from './ssh-session.ts'
 
 declare module '@deepseek-ai/dsh-jobs' {
   interface JobKindMap {
@@ -23,15 +25,24 @@ declare module '@deepseek-ai/dsh-jobs' {
   }
 }
 
-class XTerminalRemoteError extends HarnessError {}
+const connectionModes = ['plugin', 'harness'] as const
+type ConnectionMode = typeof connectionModes[number]
 
 interface Connection {
   readonly turn: number
+  readonly mode: ConnectionMode
   readonly client: Client
   readonly closed: Promise<void>
   readonly cancel: AbortController
   readonly jobs: Set<Promise<JobOutcome>>
   retired: boolean
+}
+
+interface PendingConnection {
+  readonly turn: number
+  readonly mode: ConnectionMode
+  readonly cancel: AbortController
+  readonly ready: Promise<Connection>
 }
 
 /** Local trusted keys and deadlines for the remote tools. */
@@ -61,19 +72,20 @@ function keyOf(target: ServerEndpoint): string {
   return JSON.stringify([target.title, target.host, target.port])
 }
 
-async function catalogIdentity(path: string) {
-  try {
-    return await stat(path, { bigint: true })
-  } catch (_error) {
-    throw new XTerminalRemoteError('The XTerminal catalog is no longer available.', 'XTERMINAL_TARGET_CHANGED')
+function requireMode(current: ConnectionMode, requested: ConnectionMode): void {
+  if (current !== requested) {
+    throw new XTerminalRemoteError(
+      `This target already has a ${current}-mode connection or connection attempt. Use that mode or start a new task.`,
+      'XTERMINAL_CONNECTION_MODE_CONFLICT',
+    )
   }
 }
 
-async function approve(ctx: Context, agent: Agent, exec: ToolRunContext, reason: string): Promise<void> {
+async function approve(ctx: Context, agent: Agent, exec: ToolRunContext, reason: string, signal: AbortSignal): Promise<void> {
   const outcome = await ctx.approval.request({
-    agent, callId: exec.callId, toolName: exec.name, reason, signal: exec.signal,
+    agent, callId: exec.callId, toolName: exec.name, reason, signal,
   })
-  exec.signal.throwIfAborted()
+  signal.throwIfAborted()
   if (outcome !== 'allowed-once') {
     throw new XTerminalRemoteError('The SSH operation was not approved.', 'XTERMINAL_APPROVAL_REQUIRED')
   }
@@ -108,7 +120,9 @@ export function registerRemoteTools(
   const trustFile = join(homedir(), 'Library', 'Application Support', 'xterminal', 'ssh', 'known_hosts.json')
   const connections = new Map<Agent, Map<string, Connection>>()
   const retired = new Map<Agent, Set<Connection>>()
-  const connecting = new Map<Agent, Map<string, Promise<Connection>>>()
+  const connecting = new Map<Agent, Map<string, PendingConnection>>()
+  const agentCleanups = new Map<Agent, () => Promise<void> | void>()
+  const references = new ConnectionReferences()
   const shutdown = new AbortController()
   const outputRoot = join(ctx.profileContext.dir, 'tool-xterminal', 'output')
   const retentionDays = config.outputRetentionDays ?? 30
@@ -118,7 +132,7 @@ export function registerRemoteTools(
   function retire(agent: Agent, connection: Connection, force: boolean): void {
     connection.retired = true
     if (force) connection.cancel.abort()
-    if (connection.jobs.size === 0) connection.client.end()
+    if (connection.jobs.size === 0) connection.client.destroy()
     let owned = retired.get(agent)
     if (owned === undefined) {
       owned = new Set()
@@ -131,8 +145,41 @@ export function registerRemoteTools(
     })
   }
 
+  async function closeAgentConnections(agent: Agent): Promise<void> {
+    const pending = [...connecting.get(agent)?.values() ?? []]
+    for (const attempt of pending) attempt.cancel.abort()
+    const active = connections.get(agent)
+    connections.delete(agent)
+    for (const connection of active?.values() ?? []) retire(agent, connection, true)
+    const closing = [...retired.get(agent) ?? []]
+    for (const connection of closing) connection.cancel.abort()
+    await Promise.allSettled([
+      ...pending.map(attempt => attempt.ready),
+      ...closing.flatMap(connection => [connection.closed, ...connection.jobs]),
+    ])
+  }
+
+  function trackAgent(agent: Agent): void {
+    if (agentCleanups.has(agent)) return
+    let closing: Promise<void> | undefined
+    const detach = agent.ctx.effect(() => () => {
+      closing ??= closeAgentConnections(agent).finally(() => { agentCleanups.delete(agent) })
+      return closing
+    }, 'tool-xterminal.closeAgentConnections()')
+    agentCleanups.set(agent, () => {
+      const detached = detach()
+      return closing ?? detached
+    })
+  }
+
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'turn/end') return
+    for (const [agent, attempts] of connecting) {
+      if (agent.session !== session) continue
+      for (const attempt of attempts.values()) {
+        if (attempt.turn === event.data.turn) attempt.cancel.abort()
+      }
+    }
     for (const [agent, byTarget] of connections) {
       if (agent.session !== session) continue
       for (const [key, connection] of byTarget) {
@@ -143,36 +190,29 @@ export function registerRemoteTools(
       if (byTarget.size === 0) connections.delete(agent)
     }
   })
-  ctx.on('agent/disposed', ({ agent }) => {
-    const active = connections.get(agent)
-    connections.delete(agent)
-    for (const connection of active?.values() ?? []) retire(agent, connection, true)
-    for (const connection of retired.get(agent) ?? []) connection.cancel.abort()
-  })
   ctx.effect(() => async () => {
     shutdown.abort()
-    await sweep
-    for (const [agent, byTarget] of connections) {
-      for (const connection of byTarget.values()) retire(agent, connection, true)
-    }
-    connections.clear()
-    await Promise.allSettled([...connecting.values()].flatMap(targets => [...targets.values()]))
-    const closing = [...retired.values()].flatMap(list => [...list])
-    for (const connection of closing) connection.cancel.abort()
-    await Promise.allSettled(closing.flatMap(connection => [connection.closed, ...connection.jobs]))
-  })
+    await Promise.allSettled([sweep, ...[...agentCleanups.values()].map(close => close())])
+  }, 'tool-xterminal.shutdown()')
 
   ctx.tools.register(defineTool({
     name: 'xterminal_connect',
-    description: 'Connect to an exact saved XTerminal target for the current task.',
-    parameters: targetParameters,
+    description: 'Request approval to connect to a saved XTerminal target for use with xterminal_run in the current task.',
+    parameters: {
+      ...targetParameters,
+      mode: {
+        type: 'string', enum: connectionModes,
+        description: 'Defaults to plugin. Set harness when the task requires Harness to initiate the connection.',
+      },
+    },
     output,
     isConcurrencySafe: () => true,
-    async execute(endpoint, exec) {
+    async execute({ title, host, port, mode = 'plugin' }, exec) {
       const { agent, turn } = requireTask(ctx, exec)
       const signal = AbortSignal.any([exec.signal, shutdown.signal])
+      const endpoint = { title, host, port }
       const path = await database(signal)
-      const original = await catalogIdentity(path)
+      const file = await catalogIdentity(path)
       const target = resolveSavedServer(path, endpoint)
       const hostKey = keys.get(`${target.host}:${target.port}`) ?? (process.platform === 'darwin'
         ? await readXTerminalHostFingerprint(trustFile, target)
@@ -184,45 +224,70 @@ export function registerRemoteTools(
           'XTERMINAL_HOST_KEY_REQUIRED',
         )
       }
-      await approve(ctx, agent, exec, `Connect to ${JSON.stringify(target.title)} (${target.host}:${target.port}).`)
-      signal.throwIfAborted()
+      await approve(ctx, agent, exec, `Connect to ${JSON.stringify(target.title)} (${target.host}:${target.port}).`, signal)
+      if (requireTask(ctx, exec).turn !== turn) {
+        throw new XTerminalRemoteError('The task is no longer active.', 'XTERMINAL_TASK_ENDED')
+      }
       const key = keyOf(endpoint)
-      if (connections.get(agent)?.get(key)?.turn === turn) return 'SSH connection ready.'
+      const ready = connections.get(agent)?.get(key)
+      if (ready?.turn === turn) {
+        requireMode(ready.mode, mode)
+        return 'SSH connection ready.'
+      }
+      const attemptKey = JSON.stringify([turn, key])
+      trackAgent(agent)
       let pending = connecting.get(agent)
       if (pending === undefined) {
         pending = new Map()
         connecting.set(agent, pending)
       }
-      const active = pending.get(key)
+      const active = pending.get(attemptKey)
       if (active !== undefined) {
-        const connection = await active
+        requireMode(active.mode, mode)
+        const connection = await active.ready
         signal.throwIfAborted()
-        if (connection.turn !== turn || connection.retired) {
+        if (connections.get(agent)?.get(key) !== connection) {
           throw new XTerminalRemoteError('The SSH connection is unavailable.', 'XTERMINAL_CONNECTION_UNAVAILABLE')
         }
         return 'SSH connection ready.'
       }
-      const attempt = (async () => {
-        const current = await catalogIdentity(path)
-        if (original.dev !== current.dev || original.ino !== current.ino || requireTask(ctx, exec).turn !== turn) {
-          throw new XTerminalRemoteError('The catalog or task changed. Select the target again.', 'XTERMINAL_TARGET_CHANGED')
+      const cancelAttempt = new AbortController()
+      const attemptSignal = AbortSignal.any([signal, cancelAttempt.signal])
+      const selection = { path, file, target }
+      const call = { agent, session: agent.session, turn, callId: exec.callId, token: exec.token }
+
+      const connect = async (): Promise<Client> => {
+        if (mode === 'harness') {
+          const reference = references.issue(call, selection, hostKey, connectTimeout, attemptSignal)
+          try {
+            return await openHarnessConnection(references, reference, call, endpoint)
+          } finally {
+            references.revoke(reference)
+          }
         }
-        const client = await connectVerified(target, readServerAuthentication(path, target), hostKey, connectTimeout, signal)
+        await verifyCatalogIdentity(selection)
+        attemptSignal.throwIfAborted()
+        return connectVerified(target, readServerAuthentication(path, target), hostKey, connectTimeout, attemptSignal)
+      }
+
+      const attempt = (async () => {
+        const client = await connect()
         const cancel = new AbortController()
         let resolveClose: () => void = () => undefined
         const closed = new Promise<void>((resolve) => { resolveClose = resolve })
-        const connection: Connection = { turn, client, cancel, closed, jobs: new Set(), retired: false }
+        const connection: Connection = { turn, mode, client, cancel, closed, jobs: new Set(), retired: false }
         client.on('error', () => client.destroy())
         client.once('close', () => {
           const byTarget = connections.get(agent)
           if (byTarget?.get(key) === connection) {
             byTarget.delete(key)
             if (byTarget.size === 0) connections.delete(agent)
+            retire(agent, connection, false)
           }
           resolveClose()
         })
         try {
-          signal.throwIfAborted()
+          attemptSignal.throwIfAborted()
           if (requireTask(ctx, exec).turn !== turn) throw new Error('Task ended')
         } catch (_error) {
           client.destroy()
@@ -234,12 +299,12 @@ export function registerRemoteTools(
         connections.set(agent, byTarget)
         return connection
       })()
-      pending.set(key, attempt)
+      pending.set(attemptKey, { turn, mode, cancel: cancelAttempt, ready: attempt })
       try {
         await attempt
         return 'SSH connection ready.'
       } finally {
-        pending.delete(key)
+        pending.delete(attemptKey)
         if (pending.size === 0) connecting.delete(agent)
       }
     },
@@ -262,7 +327,8 @@ export function registerRemoteTools(
       if (connection?.turn !== turn) {
         throw new XTerminalRemoteError('Connect to this XTerminal target first.', 'XTERMINAL_CONNECTION_UNAVAILABLE')
       }
-      await approve(ctx, agent, exec, `Run on ${JSON.stringify(input.title)} (${input.host}:${input.port}): ${input.command}`)
+      const signal = AbortSignal.any([exec.signal, shutdown.signal])
+      await approve(ctx, agent, exec, `Run on ${JSON.stringify(input.title)} (${input.host}:${input.port}): ${input.command}`, signal)
       const sessionFolder = createHash('sha256').update(agent.id).digest('hex')
       const root = join(outputRoot, sessionFolder)
       try {
@@ -291,7 +357,7 @@ export function registerRemoteTools(
           connection.jobs.add(done)
           void done.finally(() => {
             connection.jobs.delete(done)
-            if (connection.retired && connection.jobs.size === 0) connection.client.end()
+            if (connection.retired && connection.jobs.size === 0) connection.client.destroy()
           })
           return { cancel: () => cancel.abort(), done }
         },

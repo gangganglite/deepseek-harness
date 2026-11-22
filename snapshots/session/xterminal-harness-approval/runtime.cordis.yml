@@ -1,0 +1,10 @@
+- insert:
+    - id: xterminal-catalog-fixture
+      name: ./catalog-fixture.mjs
+    - id: tool-xterminal
+      name: ../../../packages/experimental/tool-xterminal/src/index.ts
+      config:
+        allowedRoots:
+          - !!js dshHomePath('xterminal-fixture')
+        hostKeys:
+          '127.0.0.1:22': SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA

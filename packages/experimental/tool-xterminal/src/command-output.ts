@@ -72,7 +72,7 @@ export async function captureCommand(
       throw new XTerminalCommandError('Could not open the SSH output file.', 'XTERMINAL_OUTPUT_UNAVAILABLE')
     }
     signal.throwIfAborted()
-    const opened = await new Promise<ClientChannel>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       client.exec(command, (error, stream) => {
         if (error) {
           reject(new XTerminalCommandError(
@@ -80,17 +80,50 @@ export async function captureCommand(
             'XTERMINAL_COMMAND_START_FAILED',
           ))
         }
-        else resolve(stream)
+        else resolve(collect(stream))
       })
     })
+    writer.end()
+    if (!await drained) {
+      return fail('Could not finish writing SSH output. The file may be incomplete.', 'XTERMINAL_OUTPUT_WRITE_FAILED')
+    }
+    if (signal.aborted || exitCode === undefined) {
+      return fail('Command result unknown. Output may be partial.', 'XTERMINAL_COMMAND_RESULT_UNKNOWN', signal.aborted ? 'killed' : 'failed')
+    }
+    const exit = exitCode === 0 ? '' : `\n[Command exited with code ${exitCode}.]`
+    const omitted = overflow || prefix.length + Array.from(exit).length > LIMIT
+    if (omitted) {
+      publishedPath = true
+      complete()
+    }
+    publish({ text: preview(exit + (omitted ? `\n[Some output was omitted. Complete output is at ${path}.]` : '')) })
+    return { status: 'completed', exitCode }
+  } catch (error) {
+    channel?.destroy()
+    writer.end()
+    await drained
+    if (!signal.aborted && error instanceof XTerminalCommandError) {
+      publish({ error })
+      return { status: 'failed', detail: error.message }
+    }
+    return fail('Command result unknown. Output may be partial.', 'XTERMINAL_COMMAND_RESULT_UNKNOWN', signal.aborted ? 'killed' : 'failed')
+  } finally {
+    clearTimeout(stopTimer)
+    signal.removeEventListener('abort', abort)
+    if (publishedPath) {
+      await recordClosedOutput(path).catch(() => undefined)
+    } else {
+      await unlink(path).catch(() => undefined)
+    }
+  }
+
+  async function collect(opened: ClientChannel): Promise<void> {
     channel = opened
     if (signal.aborted) {
       opened.destroy()
       signal.throwIfAborted()
     }
     const ended = Promise.all([once(opened, 'close'), once(opened.stderr, 'end')])
-    // Observe a channel error while the writer is draining.
-    void ended.catch(() => undefined)
     const stdout = new StringDecoder('utf8')
     const stderr = new StringDecoder('utf8')
     const send = (text: string) => {
@@ -126,43 +159,12 @@ export async function captureCommand(
     })
     opened.on('data', (chunk: Buffer) => send(stdout.write(chunk)))
     opened.stderr.on('data', (chunk: Buffer) => send(stderr.write(chunk)))
+    // The SSH parser can deliver the exit status in the same read that acknowledges exec.
     opened.once('exit', (code: unknown) => {
       if (typeof code === 'number') exitCode = code
     })
     await ended
     send(stdout.end())
     send(stderr.end())
-    writer.end()
-    if (!await drained) {
-      return fail('Could not finish writing SSH output. The file may be incomplete.', 'XTERMINAL_OUTPUT_WRITE_FAILED')
-    }
-    if (signal.aborted || exitCode === undefined) {
-      return fail('Command result unknown. Output may be partial.', 'XTERMINAL_COMMAND_RESULT_UNKNOWN', signal.aborted ? 'killed' : 'failed')
-    }
-    const exit = exitCode === 0 ? '' : `\n[Command exited with code ${exitCode}.]`
-    const omitted = overflow || prefix.length + Array.from(exit).length > LIMIT
-    if (omitted) {
-      publishedPath = true
-      complete()
-    }
-    publish({ text: preview(exit + (omitted ? `\n[Some output was omitted. Complete output is at ${path}.]` : '')) })
-    return { status: 'completed', exitCode }
-  } catch (error) {
-    channel?.destroy()
-    writer.end()
-    await drained
-    if (!signal.aborted && error instanceof XTerminalCommandError) {
-      publish({ error })
-      return { status: 'failed', detail: error.message }
-    }
-    return fail('Command result unknown. Output may be partial.', 'XTERMINAL_COMMAND_RESULT_UNKNOWN', signal.aborted ? 'killed' : 'failed')
-  } finally {
-    clearTimeout(stopTimer)
-    signal.removeEventListener('abort', abort)
-    if (publishedPath) {
-      await recordClosedOutput(path).catch(() => undefined)
-    } else {
-      await unlink(path).catch(() => undefined)
-    }
   }
 }

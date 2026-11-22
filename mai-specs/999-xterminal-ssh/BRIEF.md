@@ -23,6 +23,8 @@ Harness 自动发现并记住本机 XTerminal 数据库位置，自动发现失�
 
 首版统一使用 TypeScript，覆盖 Cordis 插件入口、本机凭据读取和 SSH 认证建连，运行时沿用 Harness 的 Node.js。
 
+首版交付插件建连和 Harness 发起 SSH 连接两条路径。Harness 路径在本机使用临时引用认证。[测试计划](test/TEST_PLAN.md)覆盖两种认证、模式冲突和资源释放。临时引用和 Harness 建连任务已实现，隔离 headless profile 已验证两种认证及命令接续。复核证据和真实 XTerminal 认证的待验范围见[代码评审](review/code_review.md)。PRD 的 AC-6 文案待同步。
+
 ## 上下文索引
 
 - [素材索引](context/_INDEX.md)

@@ -1,9 +1,12 @@
 /** Establish an SSH session using local authentication and a pinned host key. */
 
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { HarnessError } from '@deepseek-ai/dsh-error'
-import { Client } from 'ssh2'
+import type { Client } from 'ssh2'
 import type { ServerAuthentication, ServerEndpoint } from './catalog.ts'
+
+const require = createRequire(import.meta.url)
 
 class XTerminalSshError extends HarnessError {}
 
@@ -24,7 +27,9 @@ export async function connectVerified(
   signal: AbortSignal,
 ): Promise<Client> {
   signal.throwIfAborted()
-  const client = new Client()
+  // Use ssh2's CommonJS exports directly when the Desktop Loader mounts the bundle.
+  const { Client: SshClient } = require('ssh2') as typeof import('ssh2')
+  const client = new SshClient()
   return new Promise((resolve, reject) => {
     let rejectedHost = false
     let failure: unknown
